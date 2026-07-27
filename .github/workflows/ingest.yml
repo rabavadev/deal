@@ -1,0 +1,29 @@
+name: ingest
+on:
+  schedule:
+    - cron: '0 10 * * *'   # 06:00 America/New_York during EDT
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx tsx scripts/ingest/run.ts
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_CONTACT: ${{ secrets.VAPID_CONTACT }}
+          INGEST_ADDRESS: ${{ secrets.INGEST_ADDRESS }}
+          INGEST_POSTAL_CODE: ${{ secrets.INGEST_POSTAL_CODE }}
+          INGEST_LAT: ${{ secrets.INGEST_LAT }}
+          INGEST_LNG: ${{ secrets.INGEST_LNG }}
+          INGEST_WF_STORE_ID: ${{ secrets.INGEST_WF_STORE_ID }}

@@ -1,0 +1,91 @@
+import 'dotenv/config'
+import { getServiceClient } from '@/lib/db'
+import { dealRow, flyerRow } from '@/lib/ingest/upsert'
+import { flippSource } from '@/lib/sources/flipp'
+import { fairwaySource } from '@/lib/sources/fairway'
+import { wholeFoodsSource } from '@/lib/sources/wholefoods'
+import { DEFAULT_LOCATION } from '@/config/location'
+import { syncStores } from '@/lib/stores/overpass'
+import type { DealSource } from '@/lib/types'
+
+const sources: DealSource[] = [flippSource, fairwaySource, wholeFoodsSource]
+
+// enrich Flipp items (multi-buy "4/$1" pricing) only for stores near home —
+// per-item requests are too many to do for every flyer in the metro
+async function closeStoreSlugs(): Promise<Set<string>> {
+  const { data } = await getServiceClient().from('stores')
+    .select('slug, distance_miles').lte('distance_miles', 3)
+  return new Set((data ?? []).map(s => s.slug))
+}
+
+async function runSource(src: DealSource, logos: Map<string, string>, closeSlugs: Set<string>) {
+  const db = getServiceClient()
+  const started = new Date().toISOString()
+  let flyerCount = 0, dealCount = 0, error: string | null = null
+  try {
+    const flyers = await src.fetchFlyers(DEFAULT_LOCATION)
+    for (const f of flyers) if (f.logoUrl) logos.set(f.merchantSlug, f.logoUrl)
+    for (const flyer of flyers) {
+      const { data: frow, error: ferr } = await db.from('flyers')
+        .upsert(flyerRow(flyer), { onConflict: 'source,external_id' })
+        .select('id').single()
+      if (ferr || !frow) throw new Error(`flyer upsert failed: ${ferr?.message}`)
+      flyerCount++
+      let deals
+      try { deals = await src.fetchDeals(flyer) }
+      catch (e) { console.error(`[${src.id}] deals failed for flyer ${flyer.externalId}:`, e); continue }
+      if (src.id === 'flipp' && closeSlugs.has(flyer.merchantSlug)) {
+        const { enrichFlippDeals } = await import('@/lib/sources/flipp')
+        deals = await enrichFlippDeals(deals)
+        console.log(`[flipp] enriched ${deals.length} items for nearby ${flyer.merchantSlug}`)
+      }
+      if (deals.length === 0) continue
+      let rows = deals.map(d => dealRow(d, frow.id))
+      if (src.id === 'fairway') {
+        // preserve extraction-sourced prices across rate-limited runs
+        const nullIds = rows.filter(r => r.price == null).map(r => r.external_id)
+        if (nullIds.length) {
+          const { mergePreservedPrices } = await import('@/lib/ingest/preserve')
+          const { data: existing } = await db.from('deals')
+            .select('external_id, price, price_text, unit_price')
+            .eq('source', src.id).in('external_id', nullIds).not('price', 'is', null)
+          if (existing?.length) rows = mergePreservedPrices(rows, existing)
+        }
+      }
+      const { error: derr } = await db.from('deals').upsert(rows, { onConflict: 'source,external_id' })
+      if (derr) throw new Error(`deal upsert failed: ${derr.message}`)
+      dealCount += rows.length
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e)
+    console.error(`[${src.id}] FAILED:`, error)
+  }
+  await db.from('ingest_runs').insert({
+    source: src.id, started_at: started, finished_at: new Date().toISOString(),
+    flyer_count: flyerCount, deal_count: dealCount, error,
+  })
+  console.log(`[${src.id}] flyers=${flyerCount} deals=${dealCount} error=${error ?? 'none'}`)
+  return error === null
+}
+
+async function main() {
+  const logos = new Map<string, string>()
+  const closeSlugs = await closeStoreSlugs().catch(() => new Set<string>())
+  const results = await Promise.all(sources.map(s => runSource(s, logos, closeSlugs)))
+  try { await syncStores(DEFAULT_LOCATION, logos) } catch (e) { console.error('store sync failed:', e) }
+  try {
+    const { error } = await getServiceClient().rpc('refresh_history_flags')
+    if (error) throw new Error(error.message)
+    console.log('[history] flags refreshed')
+  } catch (e) { console.error('history flags failed:', e) }
+  try {
+    const { sendWatchAlerts } = await import('@/lib/notify')
+    await sendWatchAlerts()
+  } catch (e) { console.error('watch alerts failed:', e) }
+  try {
+    const { generateDinnerIdeas } = await import('@/lib/dinner')
+    await generateDinnerIdeas()
+  } catch (e) { console.error('dinner ideas failed:', e) }
+  if (results.every(ok => !ok)) process.exit(1) // fail the job only if EVERY source failed
+}
+main()

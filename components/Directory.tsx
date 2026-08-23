@@ -1,17 +1,32 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CATEGORIES, OFFER_TYPE_STYLES, offerType, toolRegion, type Tool } from "@/lib/tools";
 import OfferCard, { OfferBanner, RegionPill, TagPills } from "./OfferCard";
 import Link from "next/link";
 
+// Fresh data straight from the repo — admin panel saves show up without a redeploy.
+const LIVE_DATA_URL =
+  "https://raw.githubusercontent.com/rabavadev/deal/main/lib/tools-data.json";
+
 const PER_PAGE_OPTIONS = [12, 24, 48];
 const SORTS = ["Newest", "Oldest", "Name A-Z"] as const;
 
-export default function Directory({ tools }: { tools: Tool[] }) {
+export default function Directory({ tools: initialTools }: { tools: Tool[] }) {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") ?? "";
+
+  const [tools, setTools] = useState<Tool[]>(initialTools);
+
+  useEffect(() => {
+    fetch(`${LIVE_DATA_URL}?t=${Date.now()}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data) && data.length) setTools(data);
+      })
+      .catch(() => {});
+  }, []);
 
   const [category, setCategory] = useState<string>("All");
   const [sort, setSort] = useState<(typeof SORTS)[number]>("Newest");

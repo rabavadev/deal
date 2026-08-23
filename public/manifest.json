@@ -1,7 +1,7 @@
 {
-  "name": "Deal Radar",
-  "short_name": "Deal Radar",
-  "description": "This week's best supermarket deals near you",
+  "name": "Deal",
+  "short_name": "Deal",
+  "description": "Free credits and deals on the best AI tools",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0a0a",

@@ -55,7 +55,7 @@ print("got upload token", flush=True)
 
 # 3. check missing
 hashes = sorted({f["hash"] for f in files.values()})
-missing = set(req("/pages/assets/check-missing", jwt, {"hashes": hashes}))
+missing = set(hashes)  # force-upload all for consistency
 print(f"{len(missing)} missing of {len(hashes)}", flush=True)
 
 # 4. upload missing in batches (~40MB cap; our files are tiny, batch by count)
@@ -81,4 +81,4 @@ res = req(f"/accounts/{ACCOUNT}/pages/projects/{PROJECT}/deployments", TOKEN, fo
     "commit_dirty": "true",
     "commit_message": "Deploy Deal - AI tool offers directory",
 })
-print("DEPLOYED:", res["url"], flush=True)
+print("DEPLOYED:", res.get("result", {}).get("url") or res, flush=True)
